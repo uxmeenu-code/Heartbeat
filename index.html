@@ -575,10 +575,26 @@ function startPPG(vid) {
   wC.width  = wC.offsetWidth*dpr;
   wC.height = wC.offsetHeight*dpr;
 
-  const HZ=30, MIN_GAP=350, WIN=5, DC=90;
-  const sq=[]; let lastPk=-1, fi=0;
+  /* ── Signal processing constants ──────────────────────────────────
+     HZ:       camera frame rate (~30fps)
+     MIN_GAP:  min ms between heartbeats (= max ~167 BPM)
+     DC_WIN:   DC-removal window in samples. Smaller = faster response
+               to slow brightness drift from auto-exposure. 45 = ~1.5s
+     SMOOTH:   light smoothing — just 3-sample moving average.
+               Low EMA (0.08) was killing the pulse oscillation entirely.
+     PEAK_THR: how high in the amplitude window a local max must be
+               to count as a peak. 0.35 is permissive enough for weak signals.
+  ───────────────────────────────────────────────────────────────── */
+  const HZ=30, MIN_GAP=333, DC_WIN=45, PEAK_THR=0.35;
+  let raw_buf=[];          /* unsmoothed red channel values */
+  let ppg_buf=[];          /* DC-removed, lightly smoothed signal */
+  let ts_buf=[];           /* timestamps matching ppg_buf */
+  let lastPk=-1, fi=0;
 
-  /* Start countdown immediately — don't gate on finger detection */
+  /* No-signal tracking — only warn after 80% of scan time */
+  let noSigFrames=0, totalFrames=0;
+
+  /* Start countdown immediately */
   G.scanTimer = setInterval(()=>{
     G.elapsed++;
     const rem=G.SCAN_SECS-G.elapsed;
@@ -587,82 +603,113 @@ function startPPG(vid) {
     if(G.elapsed>=G.SCAN_SECS){ clearInterval(G.scanTimer); G.scanTimer=null; finalize(); }
   },1000);
 
-  /* Track rolling amplitude to detect finger presence */
-  let noSigCount=0;
-
   function frame() {
-    if(!G.stream){ return; }
-    fi++; G.frameN++;
+    if(!G.stream) return;
+    fi++; G.frameN++; totalFrames++;
+
+    /* ── Sample camera red channel ── */
     ctx.drawImage(vid,0,0,40,30);
     const px=ctx.getImageData(0,0,40,30).data;
     const N=px.length/4;
     let rs=0;
     for(let i=0;i<px.length;i+=4) rs+=px[i];
     const mR=rs/N;
+    const now=Date.now();
 
-    /* Always collect signal — use amplitude to show quality */
-    G.ema = G.EMA*mR + (1-G.EMA)*G.ema;
-    sq.push(G.ema); if(sq.length>WIN) sq.shift();
-    const sm = sq.reduce((a,b)=>a+b,0)/sq.length;
-    const now = Date.now();
-    G.ppgBuf.push(sm); G.ppgTs.push(now);
+    /* ── 3-sample moving average — minimal smoothing to preserve pulse shape ── */
+    raw_buf.push(mR);
+    if(raw_buf.length>3) raw_buf.shift();
+    const smoothed=raw_buf.reduce((a,b)=>a+b,0)/raw_buf.length;
+
+    /* ── DC removal: subtract rolling mean over DC_WIN samples ──────────────
+       This removes the slow baseline drift from auto-exposure and
+       reveals the small AC pulse oscillation riding on top.
+       Result is a zero-centered PPG waveform. ─────────────────────────── */
+    G.ppgBuf.push(smoothed); G.ppgTs.push(now);
     if(G.ppgBuf.length>300){ G.ppgBuf.shift(); G.ppgTs.shift(); }
 
-    const win=G.ppgBuf.slice(-DC);
-    const lo=Math.min(...win), hi=Math.max(...win), amp=hi-lo;
+    const dc_slice=G.ppgBuf.slice(-DC_WIN);
+    const dc_mean=dc_slice.reduce((a,b)=>a+b,0)/dc_slice.length;
+    const ac=smoothed-dc_mean;  /* AC component = the pulse */
 
-    /* Finger detection via amplitude:
-       - No finger on camera = flat noisy signal = amp near 0
-       - Finger on lens = pulsing blood = amp oscillates 1-15+
-       - Use a low threshold — even a weak pulse is detectable */
-    const hasSignal = G.ppgBuf.length > 20 && amp > 0.8;
-    G.fingerOn = hasSignal;
+    ppg_buf.push(ac); ts_buf.push(now);
+    if(ppg_buf.length>300){ ppg_buf.shift(); ts_buf.shift(); }
 
-    const q=Math.min(5,Math.floor(amp/1.2));
+    /* ── Amplitude of AC signal over recent window ── */
+    const ac_win=ppg_buf.slice(-DC_WIN);
+    const ac_lo=Math.min(...ac_win), ac_hi=Math.max(...ac_win);
+    const amp=ac_hi-ac_lo;
+
+    /* ── Signal quality ─────────────────────────────────────────────────────
+       amp thresholds tuned for camera PPG:
+         <0.3 = definitely no signal (flat line)
+         0.3-1.0 = very weak (motion artifact or light touch)
+         1.0-3.0 = weak but detectable
+         3.0+ = good clean pulse
+    ─────────────────────────────────────────────────────────────────────── */
+    const hasSignal=ppg_buf.length>=DC_WIN && amp>=0.3;
+
+    if(!hasSignal) noSigFrames++;
+    else noSigFrames=Math.max(0,noSigFrames-2); /* recover quickly */
+
+    /* Signal quality bars 0-5 */
+    const q=Math.min(5, amp<0.3?0 : amp<1?1 : amp<2?2 : amp<4?3 : amp<7?4 : 5);
     setSig(q);
 
-    /* Feedback based purely on signal quality */
-    if(fi < 20){
-      setStatus('init');                  /* warming up */
+    /* ── Feedback: show "no signal" only after 80% of frames are bad ───── */
+    const noSigRatio = totalFrames>30 ? noSigFrames/totalFrames : 0;
+    if(fi<20){
+      setStatus('init');
+    } else if(noSigRatio > 0.80){
+      setStatus('init');   /* 80% threshold — persistent no signal */
     } else if(!hasSignal){
-      noSigCount++;
-      if(noSigCount > 30) setStatus('init'); /* persistently no signal */
+      /* momentarily no signal but mostly good — keep last status */
     } else {
-      noSigCount=0;
-      if(q<=1) setStatus('weak');
+      if(q<=1)      setStatus('weak');
       else if(q<=2) setStatus('good');
-      else setStatus('strong');
+      else          setStatus('strong');
     }
 
-    /* Peak detection */
-    const n=G.ppgBuf.length;
-    if(n>5 && q>=1){
-      const c1=G.ppgBuf[n-3], c2=G.ppgBuf[n-2], c3=G.ppgBuf[n-1];
-      const norm=(c2-lo)/(amp||1);
-      const isPk = c2>c1 && c2>c3 && norm>.50;
-      const gapOk = (n-2)-lastPk > MIN_GAP/(1000/HZ);
+    /* ── Peak detection on AC signal ────────────────────────────────────────
+       Work on the DC-removed ac signal. Local maxima that are above
+       PEAK_THR of the amplitude range are peaks (heartbeats).
+       MIN_GAP prevents double-counting the same beat.
+    ─────────────────────────────────────────────────────────────────────── */
+    const np=ppg_buf.length;
+    if(np>=3 && hasSignal){
+      const p1=ppg_buf[np-3], p2=ppg_buf[np-2], p3=ppg_buf[np-1];
+      const norm=(p2-ac_lo)/(amp||1);
+      const isPk = p2>p1 && p2>p3 && norm>PEAK_THR;
+      const gapOk = (np-2)-lastPk > MIN_GAP/(1000/HZ);
+
       if(isPk && gapOk){
-        G.peakTs.push(G.ppgTs[n-2]); lastPk=n-2;
-        const cut=now-8000; G.peakTs=G.peakTs.filter(t=>t>cut);
+        lastPk=np-2;
+        G.peakTs.push(ts_buf[np-2]);
+        const cut=now-10000; G.peakTs=G.peakTs.filter(t=>t>cut);
+
         if(G.peakTs.length>=3){
           const ivs=[];
           for(let j=1;j<G.peakTs.length;j++) ivs.push(G.peakTs[j]-G.peakTs[j-1]);
           const med=median(ivs);
-          const clean=ivs.filter(v=>Math.abs(v-med)<med*.4);
+          /* Accept intervals within 50% of median — more permissive */
+          const clean=ivs.filter(v=>Math.abs(v-med)<med*0.50);
           if(clean.length>=2){
             const avg=clean.reduce((a,b)=>a+b,0)/clean.length;
             const raw=Math.round(60000/avg);
             if(raw>=40&&raw<=200){
-              const smooth=Math.round(.7*G.prevBpm+.3*raw); G.prevBpm=smooth;
-              G.bpmHist.push(smooth); if(G.bpmHist.length>12) G.bpmHist.shift();
-              document.getElementById('liveBpm').textContent=median(G.bpmHist).toFixed(0);
+              /* Heavier smoothing on BPM display — more stable number */
+              const smooth=Math.round(0.75*G.prevBpm+0.25*raw);
+              G.prevBpm=smooth;
+              G.bpmHist.push(smooth);
+              if(G.bpmHist.length>16) G.bpmHist.shift();
+              document.getElementById('liveBpm').textContent=Math.round(median(G.bpmHist));
             }
           }
         }
       }
     }
 
-    if(G.frameN%2===0) drawScanWave(wC,wCtx,G.ppgBuf,dpr);
+    if(G.frameN%2===0) drawScanWave(wC,wCtx,ppg_buf,dpr);
     G.rafId=requestAnimationFrame(frame);
   }
   G.rafId=requestAnimationFrame(frame);
