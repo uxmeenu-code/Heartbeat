@@ -214,6 +214,24 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 .gap{height:12px}
 .section-title{font-size:11px;letter-spacing:.16em;text-transform:uppercase;
   color:var(--tx3);font-weight:600;margin-bottom:10px}
+
+/* ── CAMERA PERMISSION CARD ── */
+.cam-perm{border-radius:var(--r);padding:14px 16px;margin-bottom:12px;
+  display:flex;align-items:center;gap:12px;border:1.5px solid;transition:all .3s}
+.cam-perm.unknown{background:rgba(74,82,104,.15);border-color:var(--bdr2)}
+.cam-perm.denied {background:rgba(232,51,74,.08);border-color:rgba(232,51,74,.35)}
+.cam-perm.granted{background:rgba(0,212,170,.08);border-color:rgba(0,212,170,.3)}
+.cam-perm.prompt {background:rgba(232,163,71,.08);border-color:rgba(232,163,71,.35)}
+.perm-icon{font-size:26px;flex-shrink:0;line-height:1}
+.perm-body{flex:1;min-width:0}
+.perm-title{font-size:13px;font-weight:700;color:var(--tx);margin-bottom:2px}
+.perm-sub  {font-size:11px;color:var(--tx3);line-height:1.5}
+.perm-btn  {flex-shrink:0;border:none;border-radius:20px;padding:7px 14px;
+  font-family:inherit;font-size:11px;font-weight:700;letter-spacing:.06em;
+  cursor:pointer;text-transform:uppercase;transition:opacity .15s,transform .1s;white-space:nowrap}
+.perm-btn:active{opacity:.8;transform:scale(.96)}
+.perm-btn.ask{background:var(--amber);color:#000}
+.perm-btn.open{background:var(--surf3);color:var(--tx2);border:1px solid var(--bdr2)}
 </style>
 </head>
 <body>
@@ -236,7 +254,17 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
     <span style="font-size:18px">💡</span>
     <p class="how-to-txt">Place your <strong>fingertip firmly</strong> over the <strong>rear camera lens</strong> and hold still for <strong>30 seconds</strong>.</p>
   </div>
-  <button class="btn btn-p" onclick="beginScan()">❤️&nbsp; BEGIN HEART SCAN</button>
+  <!-- Camera Permission Card -->
+  <div id="permCard" class="cam-perm unknown" style="display:none">
+    <div class="perm-icon" id="permIcon">📷</div>
+    <div class="perm-body">
+      <div class="perm-title" id="permTitle">Camera Access</div>
+      <div class="perm-sub"  id="permSub">Required to detect your heartbeat</div>
+    </div>
+    <button class="perm-btn ask" id="permBtn" onclick="requestCameraPermission()">Allow</button>
+  </div>
+
+  <button class="btn btn-p" id="scanBtn" onclick="beginScan()">❤️&nbsp; BEGIN HEART SCAN</button>
 </main>
 
 <!-- SCAN -->
@@ -550,67 +578,29 @@ function startPPG(vid) {
   const HZ=30, MIN_GAP=350, WIN=5, DC=90;
   const sq=[]; let lastPk=-1, fi=0;
 
+  /* Start countdown immediately — don't gate on finger detection */
+  G.scanTimer = setInterval(()=>{
+    G.elapsed++;
+    const rem=G.SCAN_SECS-G.elapsed;
+    document.getElementById('scanTime').textContent=rem+'s remaining';
+    document.getElementById('progFill').style.width=(G.elapsed/G.SCAN_SECS*100)+'%';
+    if(G.elapsed>=G.SCAN_SECS){ clearInterval(G.scanTimer); G.scanTimer=null; finalize(); }
+  },1000);
+
+  /* Track rolling amplitude to detect finger presence */
+  let noSigCount=0;
+
   function frame() {
     if(!G.stream){ return; }
     fi++; G.frameN++;
     ctx.drawImage(vid,0,0,40,30);
     const px=ctx.getImageData(0,0,40,30).data;
     const N=px.length/4;
-    let rs=0, gs=0;
-    for(let i=0;i<px.length;i+=4){ rs+=px[i]; gs+=px[i+1]; }
-    const mR=rs/N, mG=gs/N;
+    let rs=0;
+    for(let i=0;i<px.length;i+=4) rs+=px[i];
+    const mR=rs/N;
 
-    /* Spatial variance of red — finger=uniform blob=low variance */
-    let rv=0;
-    for(let i=0;i<px.length;i+=4){ const d=px[i]-mR; rv+=d*d; }
-    rv/=N;
-
-    /* Rolling variance window (last 30 frames) */
-    G.varHistory.push(rv);
-    if(G.varHistory.length>30) G.varHistory.shift();
-
-    /* Warm up for 40 frames before detecting */
-    if(fi < 40){
-      setStatus('init'); setSig(0);
-      G.rafId=requestAnimationFrame(frame); return;
-    }
-
-    /* Finger detection:
-       1. Dynamic: current variance < 30% of peak in window
-       2. Absolute: variance<500 with decent red (>50) = torch through tissue */
-    const maxV = Math.max(...G.varHistory);
-    const dynFinger  = maxV > 300 && rv < maxV * 0.30;
-    const absFinger  = rv < 500 && mR > 50;
-    const nowFinger  = dynFinger || absFinger;
-
-    if(nowFinger){ G.fpCount++; G.nfCount=0; }
-    else         { G.nfCount++; G.fpCount=0; }
-    if(G.fpCount>=5)  G.fingerOn=true;
-    if(G.nfCount>=5)  G.fingerOn=false;
-
-    if(!G.fingerOn){
-      sq.length=0;
-      G.ppgBuf=[]; G.ppgTs=[]; G.peakTs=[]; G.bpmHist=[]; G.prevBpm=72; lastPk=-1;
-      setSig(0); setStatus('init');
-      document.getElementById('liveBpm').textContent='--';
-      /* Pause countdown */
-      if(G.scanTimer){ clearInterval(G.scanTimer); G.scanTimer=null; }
-      drawScanWave(wC,wCtx,[],dpr);
-      G.rafId=requestAnimationFrame(frame); return;
-    }
-
-    /* Resume countdown when finger present */
-    if(!G.scanTimer && G.elapsed < G.SCAN_SECS){
-      G.scanTimer = setInterval(()=>{
-        G.elapsed++;
-        const rem=G.SCAN_SECS-G.elapsed;
-        document.getElementById('scanTime').textContent=rem+'s remaining';
-        document.getElementById('progFill').style.width=(G.elapsed/G.SCAN_SECS*100)+'%';
-        if(G.elapsed>=G.SCAN_SECS){ clearInterval(G.scanTimer); G.scanTimer=null; finalize(); }
-      },1000);
-    }
-
-    /* PPG signal */
+    /* Always collect signal — use amplitude to show quality */
     G.ema = G.EMA*mR + (1-G.EMA)*G.ema;
     sq.push(G.ema); if(sq.length>WIN) sq.shift();
     const sm = sq.reduce((a,b)=>a+b,0)/sq.length;
@@ -620,11 +610,29 @@ function startPPG(vid) {
 
     const win=G.ppgBuf.slice(-DC);
     const lo=Math.min(...win), hi=Math.max(...win), amp=hi-lo;
+
+    /* Finger detection via amplitude:
+       - No finger on camera = flat noisy signal = amp near 0
+       - Finger on lens = pulsing blood = amp oscillates 1-15+
+       - Use a low threshold — even a weak pulse is detectable */
+    const hasSignal = G.ppgBuf.length > 20 && amp > 0.8;
+    G.fingerOn = hasSignal;
+
     const q=Math.min(5,Math.floor(amp/1.2));
     setSig(q);
-    if(q<=1) setStatus('weak');
-    else if(q<=2) setStatus('good');
-    else setStatus('strong');
+
+    /* Feedback based purely on signal quality */
+    if(fi < 20){
+      setStatus('init');                  /* warming up */
+    } else if(!hasSignal){
+      noSigCount++;
+      if(noSigCount > 30) setStatus('init'); /* persistently no signal */
+    } else {
+      noSigCount=0;
+      if(q<=1) setStatus('weak');
+      else if(q<=2) setStatus('good');
+      else setStatus('strong');
+    }
 
     /* Peak detection */
     const n=G.ppgBuf.length;
@@ -1172,11 +1180,114 @@ function renderProfile(){
 /* ════════════════════════════════════════════
    INIT
 ════════════════════════════════════════════ */
+/* ════════════════════════════════════════════
+   CAMERA PERMISSION
+════════════════════════════════════════════ */
+function updatePermUI(state) {
+  const card  = document.getElementById('permCard');
+  const icon  = document.getElementById('permIcon');
+  const title = document.getElementById('permTitle');
+  const sub   = document.getElementById('permSub');
+  const btn   = document.getElementById('permBtn');
+  const scanBtn = document.getElementById('scanBtn');
+  if(!card) return;
+
+  card.style.display = 'flex';
+  card.className = 'cam-perm ' + state;
+
+  if(state === 'granted'){
+    icon.textContent  = '✅';
+    title.textContent = 'Camera Ready';
+    sub.textContent   = 'Heartbeat detection is enabled';
+    btn.textContent   = 'Ready';
+    btn.className     = 'perm-btn open';
+    btn.onclick       = null;
+    btn.disabled      = true;
+    btn.style.opacity = '0.5';
+    if(scanBtn){ scanBtn.style.opacity='1'; scanBtn.disabled=false; }
+  } else if(state === 'denied'){
+    icon.textContent  = '🚫';
+    title.textContent = 'Camera Blocked';
+    sub.textContent   = 'Open browser Settings → Camera → Allow';
+    btn.textContent   = 'How to fix';
+    btn.className     = 'perm-btn open';
+    btn.onclick       = ()=>toast('Go to: Settings → Safari → Camera → Allow','',5000);
+    if(scanBtn){ scanBtn.style.opacity='0.45'; scanBtn.disabled=true; }
+  } else if(state === 'prompt'){
+    icon.textContent  = '📷';
+    title.textContent = 'Camera Permission Needed';
+    sub.textContent   = 'Tap Allow to enable heartbeat detection';
+    btn.textContent   = 'Allow Camera';
+    btn.className     = 'perm-btn ask';
+    btn.onclick       = requestCameraPermission;
+    btn.disabled      = false;
+    btn.style.opacity = '1';
+    if(scanBtn){ scanBtn.style.opacity='0.6'; }
+  } else {
+    /* unknown — show softly */
+    icon.textContent  = '📷';
+    title.textContent = 'Camera Access';
+    sub.textContent   = 'Required to detect your heartbeat';
+    btn.textContent   = 'Allow';
+    btn.className     = 'perm-btn ask';
+    btn.onclick       = requestCameraPermission;
+    btn.disabled      = false;
+    btn.style.opacity = '1';
+    if(scanBtn){ scanBtn.style.opacity='0.7'; }
+  }
+}
+
+async function requestCameraPermission() {
+  const btn = document.getElementById('permBtn');
+  if(btn){ btn.textContent='…'; btn.disabled=true; }
+
+  if(!navigator.mediaDevices?.getUserMedia){
+    toast('Camera not supported — use Safari on iPhone','warn',5000);
+    updatePermUI('denied'); return;
+  }
+  try {
+    /* Request permission — browser shows native dialog */
+    const stream = await navigator.mediaDevices.getUserMedia({video:true,audio:false});
+    /* Got it — stop immediately, we just needed the permission */
+    stream.getTracks().forEach(t=>t.stop());
+    updatePermUI('granted');
+    toast('Camera access granted! Tap Begin Heart Scan ❤️','good',3000);
+  } catch(e) {
+    updatePermUI(e.name==='NotAllowedError'?'denied':'unknown');
+    if(e.name==='NotAllowedError')
+      toast('Camera blocked — check browser settings','warn',4000);
+  }
+}
+
+async function checkCameraPermission() {
+  /* Permissions API (not available in all browsers) */
+  if(navigator.permissions?.query){
+    try{
+      const p = await navigator.permissions.query({name:'camera'});
+      updatePermUI(p.state); /* 'granted' | 'denied' | 'prompt' */
+      p.onchange = ()=>updatePermUI(p.state); /* live updates */
+      return;
+    }catch{}
+  }
+  /* Fallback: try a silent probe */
+  if(navigator.mediaDevices?.enumerateDevices){
+    try{
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const hasLabel = devices.some(d=>d.kind==='videoinput'&&d.label);
+      updatePermUI(hasLabel?'granted':'prompt');
+      return;
+    }catch{}
+  }
+  /* Can't determine — show generic ask */
+  updatePermUI('unknown');
+}
+
 document.addEventListener('DOMContentLoaded',()=>{
   loadSessions();
   loadProfile();
   show('sHome');
   setTimeout(startHomeWave, 100);
+  checkCameraPermission(); /* check permission state on load */
 
   /* Warn if opened as local file — camera needs https */
   if(location.protocol==='file:'){
