@@ -6,6 +6,11 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>HeartBeat Studio</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<meta name="theme-color" content="#060810">
+<meta name="description" content="Turn your pulse into music — camera PPG heartbeat detection">
 <style>
 :root {
   --red:#e8334a; --red2:#9c1c30; --teal:#00d4aa; --amber:#e8a347;
@@ -1184,6 +1189,14 @@ document.addEventListener('DOMContentLoaded',()=>{
   }
 });
 </script>
+<script>
+if('serviceWorker' in navigator && location.protocol !== 'file:') {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('service-worker.js')
+      .then(r => console.log('[SW] registered', r.scope))
+      .catch(e => console.log('[SW] failed', e));
+  });
+}
+</script>
 </body>
 </html>
-
