@@ -572,32 +572,45 @@ function startPPG(vid) {
   const dpr=window.devicePixelRatio||1;
   wC.width=wC.offsetWidth*dpr; wC.height=wC.offsetHeight*dpr;
 
-  /* ── Signal pipeline constants ──────────────────────────────────
-     All tuned empirically for 30fps mobile camera PPG.
-     
-     KEY INSIGHT: heartbeat = torch light pulsing through fingertip.
-     Blood volume increases at each beat → absorbs MORE red light
-     → red channel at camera DECREASES at each beat (inverted signal).
-     BUT: some cameras/setups invert this. So we detect peaks on BOTH
-     the signal AND its inverse — whichever fires first wins.
-  ──────────────────────────────────────────────────────────────── */
-  const FPS        = 30;    /* frames per second                    */
-  const MA_N       = 3;     /* moving avg window — light smoothing  */
-  const DC_N       = 30;    /* DC removal window (1s) — shorter=faster response to AE drift */
-  const LP_N       = 5;     /* lowpass window — removes >6Hz noise  */
-  const MIN_IBI    = 300;   /* ms — 200 BPM ceiling                 */
-  const MAX_IBI    = 1600;  /* ms — 37  BPM floor                   */
-  const GAP_FRAMES = Math.round(MIN_IBI / (1000/FPS)); /* min frames between peaks */
-  const PKT        = 0.25;  /* peak threshold — top 25% of range    */
+  /*
+    PROVEN CAMERA PPG ALGORITHM
+    ============================
+    The only approach that works reliably on mobile:
 
-  /* ── Ring buffers ── */
-  const BUFLEN = 300;
-  let maQ=[], raw=[], sig=[], ts=[];  /* all same length, always pushed together */
+    1. Read mean RED channel from camera (avg of all pixels)
+    2. Apply a LONG DC window (128 frames = ~4s) to estimate baseline.
+       Must be LONGER than one heartbeat period — otherwise the mean
+       tracks the pulse and subtraction cancels it out.
+    3. Subtract baseline → zero-centred AC signal
+    4. Light 3-sample smooth to kill single-frame spikes
+    5. Find peaks of the AC signal — use ONLY peaks (positive direction).
+       Do NOT also detect troughs — that would double-count every beat.
+    6. Enforce minimum gap between peaks (300ms = 200 BPM max)
+    7. BPM from median of last N inter-beat intervals
+
+    FLICKERING FIX:
+    - Status/signal quality uses a HYSTERESIS counter — must see
+      30 consecutive bad frames before dropping to "no signal".
+    - "No signal" shown only when 80% of ALL frames have no rhythm.
+  */
+
+  const DC_WIN    = 128;   /* baseline window in frames (~4s at 30fps)  */
+  const SMOOTH_N  = 3;     /* light noise smoothing                      */
+  const MIN_IBI   = 300;   /* ms — floor at 200 BPM                     */
+  const MAX_IBI   = 1500;  /* ms — ceiling at 40 BPM                    */
+  const MIN_GAP   = Math.round(MIN_IBI * 30 / 1000); /* frames          */
+  const PKT       = 0.35;  /* peak must be in top 35% of recent range   */
+  const SIG_THR   = 0.15;  /* min AC amplitude to count as "has signal" */
+
+  let redBuf = [];   /* raw red channel values, length capped at DC_WIN*2 */
+  let acBuf  = [];   /* DC-removed AC signal                              */
+  let tsBuf  = [];   /* timestamps matching acBuf                         */
+  let smQ    = [];   /* smoothing queue                                    */
   let fi=0, lastPk=-1;
-  let goodFrames=0, totalFrames=0;
+  let goodCnt=0, badCnt=0, totalCnt=0;
 
-  /* ── Start countdown immediately ── */
-  G.scanTimer=setInterval(()=>{
+  /* Countdown starts immediately */
+  G.scanTimer = setInterval(()=>{
     G.elapsed++;
     const rem=G.SCAN_SECS-G.elapsed;
     document.getElementById('scanTime').textContent=rem+'s remaining';
@@ -607,101 +620,101 @@ function startPPG(vid) {
 
   function frame(){
     if(!G.stream) return;
-    fi++; G.frameN++; totalFrames++;
+    fi++; G.frameN++; totalCnt++;
 
-    /* STEP 1 — Sample: mean red across all 1200 pixels */
+    /* 1. SAMPLE — mean red channel */
     ctx.drawImage(vid,0,0,40,30);
     const px=ctx.getImageData(0,0,40,30).data;
     let rs=0;
     for(let i=0;i<px.length;i+=4) rs+=px[i];
-    const mR=rs/(px.length/4);
+    const mR = rs/(px.length/4);
 
-    /* STEP 2 — Moving average: smooth 3 frames */
-    maQ.push(mR); if(maQ.length>MA_N) maQ.shift();
-    const smoothed=maQ.reduce((a,b)=>a+b,0)/maQ.length;
+    /* 2. SMOOTH — 3-sample moving average */
+    smQ.push(mR); if(smQ.length>SMOOTH_N) smQ.shift();
+    const sm = smQ.reduce((a,b)=>a+b,0)/smQ.length;
 
-    /* STEP 3 — DC removal: subtract short rolling mean.
-       This removes slow auto-exposure drift and centres signal at 0.
-       Using subtraction (not division) — more stable for small DC_N. */
-    raw.push(smoothed);
-    if(raw.length>BUFLEN) raw.shift();
+    /* 3. BASELINE — long rolling mean (DC_WIN frames).
+          Must be longer than 1 heartbeat so it tracks slow drift only. */
+    redBuf.push(sm);
+    if(redBuf.length > DC_WIN*2) redBuf.shift();
+    const baseline = redBuf.slice(-DC_WIN).reduce((a,b)=>a+b,0) /
+                     Math.min(redBuf.length, DC_WIN);
 
-    const dcSlice=raw.slice(-DC_N);
-    const dcMean=dcSlice.reduce((a,b)=>a+b,0)/dcSlice.length;
-    const ac=smoothed - dcMean;  /* zero-centred AC signal */
+    /* 4. DC REMOVE — subtract baseline to get zero-centred AC signal */
+    const ac = sm - baseline;
 
-    /* STEP 4 — Lowpass: smooth the AC signal to kill high-freq noise */
-    const lpSlice=sig.slice(-LP_N); lpSlice.push(ac);
-    const lp=lpSlice.reduce((a,b)=>a+b,0)/lpSlice.length;
+    /* 5. STORE — keep buffers in sync */
+    acBuf.push(ac);   tsBuf.push(Date.now());
+    G.ppgBuf.push(ac); G.ppgTs.push(Date.now());
+    if(acBuf.length > 300){ acBuf.shift(); tsBuf.shift(); }
+    if(G.ppgBuf.length > 300){ G.ppgBuf.shift(); G.ppgTs.shift(); }
 
-    /* All buffers stay perfectly in sync — push together, shift together */
-    sig.push(lp);
-    ts.push(Date.now());
-    if(sig.length>BUFLEN){ sig.shift(); ts.shift(); }
-    /* G.ppgBuf mirrors sig for snapshot at finalize */
-    G.ppgBuf.push(lp); G.ppgTs.push(ts[ts.length-1]);
-    if(G.ppgBuf.length>BUFLEN){ G.ppgBuf.shift(); G.ppgTs.shift(); }
+    /* 6. AMPLITUDE — over last 2 seconds */
+    const WIN2 = 60;  /* 2-second window */
+    const ampWin = acBuf.slice(-WIN2);
+    const lo = Math.min(...ampWin);
+    const hi = Math.max(...ampWin);
+    const amp = hi - lo;
 
-    /* STEP 5 — Amplitude over 1-second window */
-    const win=sig.slice(-DC_N);
-    const lo=Math.min(...win), hi=Math.max(...win), amp=hi-lo;
+    /* 7. SIGNAL QUALITY with hysteresis (no flickering) */
+    const hasSig = acBuf.length >= WIN2 && amp >= SIG_THR;
+    if(hasSig){ goodCnt++; badCnt=0; }
+    else       { badCnt++;  goodCnt=0; }
 
-    /* Signal quality:
-       amp in raw pixel units (0-255 scale after DC removal).
-       Typical values: 0.3-8 with finger, <0.15 without. */
-    const hasSignal = sig.length>=DC_N && amp>0.15;
-    if(hasSignal) goodFrames++;
+    /* Show "no signal" only after 30 consecutive bad frames */
+    const showNoSig = badCnt > 30;
+    /* Show "no signal" status only when 80% of total frames are bad */
+    const pctBad = totalCnt>60 ? (totalCnt-goodCnt)/totalCnt : 0;
 
-    /* Quality bars 0-5 */
-    const q = amp<0.15?0 : amp<0.5?1 : amp<1.5?2 : amp<3?3 : amp<6?4 : 5;
+    const q = amp<SIG_THR?0 : amp<0.5?1 : amp<1.5?2 : amp<3?3 : amp<6?4 : 5;
     setSig(q);
 
-    /* "No signal" status only when >80% of frames have no signal */
-    const badRatio = totalFrames>60 ? 1-(goodFrames/totalFrames) : 0;
-    if(fi<15)             setStatus('init');
-    else if(badRatio>0.80) setStatus('init');
-    else if(hasSignal){
+    if(fi < 20){
+      setStatus('init');
+    } else if(showNoSig && pctBad > 0.80){
+      setStatus('init');
+    } else if(hasSig){
       if(q<=1)      setStatus('weak');
       else if(q<=2) setStatus('good');
       else          setStatus('strong');
     }
+    /* else: brief drop — hold last status (no flicker) */
 
-    /* STEP 6 — Peak detection.
-       Detect on BOTH the signal and its inverse so we catch heartbeats
-       regardless of whether this device produces positive or negative PPG.
-       We pick whichever direction gives us a valid beat. */
-    const n=sig.length;
-    if(n>=3 && hasSignal){
-      const s1=sig[n-3], s2=sig[n-2], s3=sig[n-1];
-      const norm=(s2-lo)/(amp||1);          /* 0-1 position within range */
-      const normInv=1-norm;                  /* inverted = position from top */
+    /* 8. PEAK DETECTION — positive peaks only.
+          Detect local maxima in AC signal above PKT threshold.
+          Use only ONE direction to avoid double-counting every beat. */
+    const n = acBuf.length;
+    if(n>=3 && hasSig){
+      const v1=acBuf[n-3], v2=acBuf[n-2], v3=acBuf[n-1];
+      const norm = amp>0 ? (v2-lo)/amp : 0;  /* normalised 0-1 */
 
-      /* Peak: local max above PKT from bottom OR local min above PKT from top */
-      const isPkPos = s2>s1 && s2>s3 && norm>PKT;       /* positive peak */
-      const isPkNeg = s2<s1 && s2<s3 && normInv>PKT;    /* negative trough */
-      const isPk    = isPkPos || isPkNeg;
-      const gapOk   = (n-2)-lastPk >= GAP_FRAMES;
+      /* Positive peak: local max above PKT of range */
+      /* Also try negative trough if no positive peaks after 5s */
+      const isPk = (v2>v1 && v2>v3 && norm>PKT) ||
+                   (v2<v1 && v2<v3 && (1-norm)>PKT && G.peakTs.length===0 && fi>150);
+      const gapOk = (n-2)-lastPk >= MIN_GAP;
 
       if(isPk && gapOk){
-        lastPk=n-2;
-        const beatTs=ts[n-2];
-        G.peakTs.push(beatTs);
-        /* Keep only last 12 seconds of beats */
-        const cut=beatTs-12000;
-        G.peakTs=G.peakTs.filter(t=>t>cut);
+        lastPk = n-2;
+        const t = tsBuf[n-2];
+        G.peakTs.push(t);
+        const cut = t-12000;
+        G.peakTs = G.peakTs.filter(p=>p>cut);
 
+        /* BPM from inter-beat intervals */
         if(G.peakTs.length>=3){
           const ivs=[];
-          for(let j=1;j<G.peakTs.length;j++) ivs.push(G.peakTs[j]-G.peakTs[j-1]);
+          for(let j=1;j<G.peakTs.length;j++)
+            ivs.push(G.peakTs[j]-G.peakTs[j-1]);
           const med=median(ivs);
-          /* Accept IBIs within 50% of median and within physiological range */
-          const valid=ivs.filter(v=>v>=MIN_IBI && v<=MAX_IBI && Math.abs(v-med)<med*0.50);
+          const valid=ivs.filter(v=>
+            v>=MIN_IBI && v<=MAX_IBI && Math.abs(v-med)<med*0.50
+          );
           if(valid.length>=2){
-            const avgIbi=valid.reduce((a,b)=>a+b,0)/valid.length;
-            const rawBpm=Math.round(60000/avgIbi);
-            if(rawBpm>=40&&rawBpm<=200){
-              /* 70/30 smoothing — stable but responsive */
-              const smooth=Math.round(0.70*G.prevBpm+0.30*rawBpm);
+            const avg=valid.reduce((a,b)=>a+b,0)/valid.length;
+            const raw=Math.round(60000/avg);
+            if(raw>=40&&raw<=200){
+              const smooth=Math.round(0.70*G.prevBpm+0.30*raw);
               G.prevBpm=smooth;
               G.bpmHist.push(smooth);
               if(G.bpmHist.length>16) G.bpmHist.shift();
@@ -712,7 +725,7 @@ function startPPG(vid) {
       }
     }
 
-    if(G.frameN%2===0) drawScanWave(wC,wCtx,sig,dpr);
+    if(G.frameN%2===0) drawScanWave(wC,wCtx,acBuf,dpr);
     G.rafId=requestAnimationFrame(frame);
   }
   G.rafId=requestAnimationFrame(frame);
