@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>HeartBeat Studio</title>
-<!-- APP VERSION: v6 — Jamendo music player -->
+<!-- APP VERSION: v7 — YouTube music player -->
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
@@ -51,13 +51,12 @@ nav{position:fixed;bottom:0;left:0;right:0;height:calc(var(--navh) + var(--safe-
 .card-title{font-size:13px;font-weight:700;color:var(--tx);margin-bottom:8px;
   letter-spacing:.02em}
 .song-row{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:var(--r2);cursor:pointer;transition:background .15s;border:1px solid transparent}
-.song-row:hover,.song-row.playing{background:rgba(0,212,170,.07);border-color:rgba(0,212,170,.2)}
+.song-row:active,.song-row.playing{background:rgba(0,212,170,.08);border-color:rgba(0,212,170,.18)}
+.song-num{font-size:12px;color:var(--tx3);font-weight:700;width:22px;flex-shrink:0;text-align:center}
 .song-row.playing .song-num{color:var(--teal)}
-.song-num{font-size:12px;color:var(--tx3);font-weight:600;width:18px;flex-shrink:0;text-align:center}
 .song-info{flex:1;min-width:0}
 .song-name{font-size:13px;color:var(--tx);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.song-artist{font-size:11px;color:var(--tx3);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.song-dur{font-size:11px;color:var(--tx3);flex-shrink:0}
+.song-artist{font-size:11px;color:var(--tx3);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* ── BUTTONS ── */
 .btn{width:100%;min-height:52px;border:none;border-radius:var(--r);
@@ -354,33 +353,35 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
   </div>
   <div class="card" id="songCard">
     <div class="card-title">🎧 Recommended Songs</div>
-    <div id="songState" style="font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--teal);margin-bottom:10px"></div>
+    <div id="songState" style="font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--teal);margin-bottom:12px"></div>
+
+    <!-- Hidden YouTube iframe player -->
+    <div id="ytWrap" style="display:none;position:relative;border-radius:10px;overflow:hidden;margin-bottom:12px">
+      <iframe id="ytFrame" width="100%" height="90" frameborder="0" allow="autoplay;encrypted-media" allowfullscreen
+        style="display:block;border-radius:10px;background:#000"></iframe>
+    </div>
 
     <!-- Now Playing bar -->
     <div id="nowPlaying" style="display:none;background:var(--surf2);border:1px solid var(--bdr2);border-radius:var(--r2);padding:10px 12px;margin-bottom:10px">
-      <div style="font-size:10px;color:var(--teal);font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px">▶ NOW PLAYING</div>
+      <div style="font-size:10px;color:var(--teal);font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px" id="npStatus">▶ NOW PLAYING</div>
       <div id="npTitle" style="font-size:13px;color:var(--tx);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
-      <div id="npArtist" style="font-size:11px;color:var(--tx3);margin-top:2px"></div>
-      <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
-        <button onclick="songPrev()" style="background:var(--surf3);border:none;color:var(--tx2);border-radius:6px;width:32px;height:32px;cursor:pointer;font-size:14px">⏮</button>
-        <button id="npPlayBtn" onclick="songToggle()" style="background:var(--red);border:none;color:#fff;border-radius:50%;width:36px;height:36px;cursor:pointer;font-size:14px;flex-shrink:0">⏸</button>
-        <button onclick="songNext()" style="background:var(--surf3);border:none;color:var(--tx2);border-radius:6px;width:32px;height:32px;cursor:pointer;font-size:14px">⏭</button>
-        <div style="flex:1;height:3px;background:var(--surf3);border-radius:3px;overflow:hidden">
-          <div id="npProgress" style="height:100%;background:var(--red);width:0%;transition:width .5s linear"></div>
-        </div>
-        <span id="npTime" style="font-size:10px;color:var(--tx3);white-space:nowrap">0:00</span>
+      <div id="npArtist" style="font-size:11px;color:var(--tx3);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
+        <button onclick="songPrev()" style="background:var(--surf3);border:1px solid var(--bdr2);color:var(--tx2);border-radius:8px;width:34px;height:34px;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center">⏮</button>
+        <button id="npPlayBtn" onclick="songToggle()" style="background:var(--red);border:none;color:#fff;border-radius:50%;width:38px;height:38px;cursor:pointer;font-size:15px;flex-shrink:0;display:flex;align-items:center;justify-content:center">⏸</button>
+        <button onclick="songNext()" style="background:var(--surf3);border:1px solid var(--bdr2);color:var(--tx2);border-radius:8px;width:34px;height:34px;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center">⏭</button>
+        <div style="flex:1;height:3px;background:var(--surf3);border-radius:3px"></div>
+        <span id="npNum" style="font-size:11px;color:var(--tx3)">1 / 10</span>
       </div>
     </div>
 
     <!-- Song list -->
-    <div id="songListWrap">
-      <div id="songLoading" style="text-align:center;padding:16px;color:var(--tx3);font-size:12px">Loading songs…</div>
-      <div id="songList" style="display:flex;flex-direction:column;gap:2px"></div>
-    </div>
+    <div id="songLoading" style="text-align:center;padding:18px;color:var(--tx3);font-size:12px">Loading…</div>
+    <div id="songList" style="display:flex;flex-direction:column;gap:2px"></div>
 
     <div style="display:flex;gap:8px;margin-top:10px">
       <button class="btn btn-s" onclick="refreshSongs()" style="min-height:38px;font-size:11px;flex:1">↻ Refresh</button>
-      <button class="btn btn-s" id="loopBtn" onclick="toggleLoop()" style="min-height:38px;font-size:11px;width:80px">Loop: Off</button>
+      <button class="btn btn-s" id="loopBtn" onclick="toggleLoop()" style="min-height:38px;font-size:11px;width:84px">Loop: Off</button>
     </div>
   </div>
   <input id="sessName" class="sess-input" placeholder="Name this session…" maxlength="40">
@@ -1354,29 +1355,130 @@ async function checkCameraPermission() {
   updatePermUI('unknown');
 }
 
-/* ── RECOMMENDED SONGS — Jamendo API ─────────────────────────
-   Jamendo: 600k+ Creative Commons tracks, free API, direct MP3 stream.
-   client_id: public dev-portal demo key (no registration needed for read).
-   Tags matched to heartbeat BPM state for contextually relevant music.
-─────────────────────────────────────────────────────────────────── */
-const JAMENDO_ID = '5d542b7a';  /* Jamendo public client_id (read-only) */
-const JAMENDO    = 'https://api.jamendo.com/v3.0/tracks/';
+/* ═══════════════════════════════════════════════════════════
+   RECOMMENDED SONGS — YouTube-based real music player
+   
+   Curated YouTube video IDs per BPM state.
+   Uses YouTube iframe API for playback — no CORS, works on iOS.
+   10+ songs per state, shuffle on each load.
+═══════════════════════════════════════════════════════════ */
 
-/* BPM → Jamendo genre tags */
-const BPM_TAGS = {
-  calm:   ['ambient','relaxation','classical','meditation','lounge','acoustic'],
-  focus:  ['electronic','indie','instrumental','jazz','chillout','study'],
-  active: ['pop','dance','funk','soul','blues','reggae'],
-  energy: ['rock','hiphop','metal','drum','edm','electronic'],
+const SONG_DB = {
+  calm: {
+    label: 'Calm',
+    songs: [
+      { title: 'Weightless',                artist: 'Marconi Union',           yt: 'UfcAVejslrU' },
+      { title: 'Experience',                artist: 'Ludovico Einaudi',        yt: 'hN_q-_nGv4U' },
+      { title: 'Clair de Lune',             artist: 'Debussy / Piano',         yt: '3dYKEFhfpSs' },
+      { title: 'Gymnopédie No.1',           artist: 'Erik Satie',              yt: 'S-Xm7s9eGxU' },
+      { title: 'Sleep',                     artist: 'Max Richter',             yt: 'rVN1B-tUpgs' },
+      { title: 'On the Nature of Daylight', artist: 'Max Richter',             yt: 'b_YHF4jBHkU' },
+      { title: 'River Flows In You',        artist: 'Yiruma',                  yt: '7maJOI3QMu0' },
+      { title: 'Comptine dun autre ete',  artist: 'Yann Tiersen',            yt: 'HLQqopMuAao' },
+      { title: 'Divenire',                  artist: 'Ludovico Einaudi',        yt: '_x9f5bqCai4' },
+      { title: 'Nuvole Bianche',            artist: 'Ludovico Einaudi',        yt: '4VR-6AS0-l4' },
+      { title: 'Spiegel im Spiegel',        artist: 'Arvo Pärt',               yt: 'TJ6Mzvh3XCc' },
+      { title: 'Sunset Lover',              artist: 'Petit Biscuit',           yt: 'sLd6tGbhYao' },
+    ]
+  },
+  focus: {
+    label: 'Focus',
+    songs: [
+      { title: 'Awake',                     artist: 'Tycho',                   yt: 'MgYoLFo3tHY' },
+      { title: 'Intro',                     artist: 'The xx',                  yt: 'xMV6D4SqHRg' },
+      { title: 'Time',                      artist: 'Hans Zimmer',             yt: 'RxabLA7UQ9k' },
+      { title: 'Strobe',                    artist: 'Deadmau5',                yt: 'tKi9Z-f6qX4' },
+      { title: 'Breathing Underwater',      artist: 'Emancipator',             yt: 'Q5DfpUJPOaY' },
+      { title: 'April',                     artist: 'Nils Frahm',              yt: 'dSMnK_Zy7nI' },
+      { title: 'Ghosts n Stuff',            artist: 'Deadmau5',                yt: 'gb9C1RJnWoc' },
+      { title: 'Kiara',                     artist: 'Bonobo',                  yt: 'CB_4lFDjomA' },
+      { title: 'Kong',                      artist: 'Bonobo',                  yt: 'NVs-MqKQkSU' },
+      { title: 'Glass',                     artist: 'Thompson Twins / Tycho',  yt: 'rDDhLtegBOA' },
+      { title: 'Nocturne No. 2',            artist: 'Chopin',                  yt: '9E6b3swbnWg' },
+      { title: 'Bloom',                     artist: 'Odesza',                  yt: 'bHBlSijv4Po' },
+    ]
+  },
+  active: {
+    label: 'Active',
+    songs: [
+      { title: 'Blinding Lights',           artist: 'The Weeknd',              yt: 'fHI8X4OXluQ' },
+      { title: 'Titanium',                  artist: 'David Guetta ft. Sia',    yt: 'JRfuAukYTKg' },
+      { title: 'Higher Love',               artist: 'Kygo & Whitney Houston',  yt: 'KRGET7d8nOk' },
+      { title: 'Uptown Funk',               artist: 'Mark Ronson ft. Bruno Mars', yt: 'OPf0YbXqDm0' },
+      { title: "Can't Stop the Feeling",   artist: 'Justin Timberlake',       yt: 'ru0K8uYEZWw' },
+      { title: 'Happy',                     artist: 'Pharrell Williams',        yt: 'ZbZSe6N_BXs' },
+      { title: 'Shake It Off',              artist: 'Taylor Swift',             yt: 'nfWlot6h_JM' },
+      { title: 'Sorry',                     artist: 'Justin Bieber',            yt: 'fRh_vgS2dFE' },
+      { title: 'Counting Stars',            artist: 'OneRepublic',              yt: 'hT_nvWreIhg' },
+      { title: 'Pompeii',                   artist: 'Bastille',                 yt: 'F90Cw4l-8NY' },
+      { title: 'Lovely Day',               artist: 'Bill Withers',             yt: 'bEeaS6fuUoA' },
+      { title: 'September',                 artist: 'Earth Wind & Fire',        yt: 'Gs069dndIYk' },
+    ]
+  },
+  energy: {
+    label: 'Energy',
+    songs: [
+      { title: 'Levels',                    artist: 'Avicii',                  yt: '_ovdm2yX4MA' },
+      { title: 'Animals',                   artist: 'Martin Garrix',            yt: 'gCYcHz2k5x0' },
+      { title: "Don't Stop Me Now",        artist: 'Queen',                    yt: 'HgzGwKwLmgM' },
+      { title: 'Thunderstruck',             artist: 'AC/DC',                   yt: 'v2AC41dglnM' },
+      { title: 'Eye of the Tiger',          artist: 'Survivor',                 yt: 'btPJPFnesV4' },
+      { title: 'Pump Up the Jam',           artist: 'Technotronic',             yt: 'Vg1jyL3cr60' },
+      { title: 'Jump',                      artist: 'Van Halen',                yt: 'SwYN7mTi6HM' },
+      { title: 'We Will Rock You',          artist: 'Queen',                    yt: '-tJYN-eG1zk' },
+      { title: "Run to the Hills",          artist: 'Iron Maiden',              yt: 'k2jg-P2PuOI' },
+      { title: 'Welcome to the Jungle',     artist: "Guns N Roses",           yt: 'o1tj2zJ2Wvg' },
+      { title: 'Enter Sandman',             artist: 'Metallica',                yt: 'CD-E-LDc384' },
+      { title: 'Lose Yourself',             artist: 'Eminem',                   yt: '_Yhyp-_hX2s' },
+    ]
+  }
 };
 
-/* State */
-let songTracks   = [];   /* full list from Jamendo              */
-let songIdx      = 0;    /* current track index                 */
-let songAudio    = null; /* HTMLAudioElement                    */
-let songLooping  = false;
-let songPlaying  = false;
-let npTimer      = null;
+/* ── Player state ── */
+let songList   = [];   /* shuffled songs for current state */
+let songIdx    = -1;   /* current playing index */
+let songPaused = false;
+let songLooping= false;
+let ytReady    = false;
+let ytPlayer   = null;
+let ytPending  = null; /* video ID to play once API ready */
+
+/* ── Load YouTube IFrame API once ── */
+function loadYTApi() {
+  if(window.YT || document.getElementById('yt-api-script')) return;
+  const s = document.createElement('script');
+  s.id = 'yt-api-script';
+  s.src = 'https://www.youtube.com/iframe_api';
+  document.head.appendChild(s);
+}
+
+window.onYouTubeIframeAPIReady = function() {
+  ytReady = true;
+  const frame = document.getElementById('ytFrame');
+  if(!frame) return;
+  ytPlayer = new YT.Player('ytFrame', {
+    height: '90', width: '100%',
+    playerVars: { autoplay:1, controls:1, rel:0, modestbranding:1, playsinline:1 },
+    events: {
+      onReady: function(e) {
+        if(ytPending){ e.target.loadVideoById(ytPending); ytPending=null; }
+      },
+      onStateChange: function(e) {
+        if(e.data === YT.PlayerState.ENDED) songNext();
+        if(e.data === YT.PlayerState.PLAYING) {
+          songPaused = false;
+          const pb = document.getElementById('npPlayBtn');
+          if(pb) pb.textContent = '⏸';
+        }
+        if(e.data === YT.PlayerState.PAUSED) {
+          songPaused = true;
+          const pb = document.getElementById('npPlayBtn');
+          if(pb) pb.textContent = '▶';
+        }
+      }
+    }
+  });
+};
 
 function getBpmState(bpm) {
   if(bpm < 70)  return 'calm';
@@ -1385,160 +1487,138 @@ function getBpmState(bpm) {
   return 'energy';
 }
 
-function fmtDur(s) {
-  const m = Math.floor(s/60), sec = Math.floor(s%60);
-  return m + ':' + String(sec).padStart(2,'0');
+function shuffle(arr) {
+  const a = arr.slice();
+  for(let i=a.length-1;i>0;i--){
+    const j=Math.floor(Math.random()*(i+1));
+    [a[i],a[j]]=[a[j],a[i]];
+  }
+  return a;
 }
 
-async function fetchJamendo(tag) {
-  const url = JAMENDO
-    + '?client_id=' + JAMENDO_ID
-    + '&format=json'
-    + '&limit=12'
-    + '&tags=' + encodeURIComponent(tag)
-    + '&orderby=popularity_total'
-    + '&include=musicinfo'
-    + '&audioformat=mp31';
-  const r = await fetch(url);
-  const d = await r.json();
-  return (d.results || []).filter(t => t.audio);
-}
-
-async function renderSongs() {
-  const bpm   = G.bpm || 72;
-  const state = getBpmState(bpm);
-  const stateNames = {calm:'Calm',focus:'Focus',active:'Active',energy:'Energy'};
+function renderSongs() {
+  const bpm    = G.bpm || 72;
+  const state  = getBpmState(bpm);
+  const data   = SONG_DB[state];
 
   /* Update state label */
-  const stateEl = document.getElementById('songState');
-  if(stateEl) stateEl.textContent = 'State: ' + stateNames[state] + ' · ' + bpm + ' BPM';
+  const stEl = document.getElementById('songState');
+  if(stEl) stEl.textContent = 'State: ' + data.label + '  ·  ' + bpm + ' BPM';
 
-  /* Show loading */
-  const loading = document.getElementById('songLoading');
-  const listEl  = document.getElementById('songList');
-  if(loading) loading.style.display = 'block';
-  if(listEl)  listEl.innerHTML = '';
-
-  /* Stop existing playback */
+  /* Stop current playback */
   songStop();
 
-  /* Fetch 2 tag sets → ~24 tracks, shuffle, take 12 */
-  try {
-    const tags = BPM_TAGS[state];
-    const tag1 = tags[Math.floor(Math.random()*tags.length)];
-    const tag2 = tags[Math.floor(Math.random()*tags.length)];
-    const [r1, r2] = await Promise.all([fetchJamendo(tag1), fetchJamendo(tag2)]);
-    
-    /* Merge + deduplicate by id */
-    const seen = new Set();
-    const all  = [...r1, ...r2].filter(t => { if(seen.has(t.id)) return false; seen.add(t.id); return true; });
-    
-    /* Shuffle */
-    for(let i=all.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[all[i],all[j]]=[all[j],all[i]];}
-    songTracks = all.slice(0, 12);
-  } catch(e) {
-    if(loading) loading.textContent = 'Could not load songs — check connection.';
-    return;
-  }
+  /* Shuffle the song pool */
+  songList = shuffle(data.songs);
+  songIdx  = -1;
 
-  if(loading) loading.style.display = 'none';
+  /* Hide loading, render list */
+  const loadEl = document.getElementById('songLoading');
+  if(loadEl) loadEl.style.display = 'none';
   renderSongList();
+
+  /* Load YT API if not done yet */
+  loadYTApi();
 }
 
 function renderSongList() {
-  const listEl = document.getElementById('songList');
-  if(!listEl) return;
-  listEl.innerHTML = songTracks.map((t, i) => `
-    <div class="song-row ${i===songIdx&&songPlaying?'playing':''}" id="sr${i}" onclick="playSong(${i})">
-      <div class="song-num">${i===songIdx&&songPlaying ? '▶' : i+1}</div>
+  const el = document.getElementById('songList');
+  if(!el) return;
+  el.innerHTML = songList.map((s, i) => `
+    <div class="song-row${i===songIdx?' playing':''}" onclick="playSong(${i})">
+      <div class="song-num">${i===songIdx ? '▶' : i+1}</div>
       <div class="song-info">
-        <div class="song-name">${t.name}</div>
-        <div class="song-artist">${t.artist_name}</div>
+        <div class="song-name">${s.title}</div>
+        <div class="song-artist">${s.artist}</div>
       </div>
-      <div class="song-dur">${fmtDur(t.duration)}</div>
     </div>`).join('');
 }
 
 function playSong(idx) {
-  songStop();
+  if(idx < 0 || idx >= songList.length) return;
   songIdx = idx;
-  const track = songTracks[idx];
-  if(!track) return;
+  const song = songList[idx];
 
-  songAudio = new Audio(track.audio);
-  songAudio.crossOrigin = 'anonymous';
-  songAudio.play().then(()=>{
-    songPlaying = true;
-    updateNowPlaying();
-    renderSongList();
-    startProgressTimer();
-  }).catch(e => {
-    /* On CORS block: try audiodownload fallback or skip */
-    if(songTracks[idx+1]) playSong(idx+1);
-  });
+  /* Show now-playing */
+  const npEl = document.getElementById('nowPlaying');
+  const ytWrap = document.getElementById('ytWrap');
+  if(npEl) npEl.style.display = 'block';
+  if(ytWrap) ytWrap.style.display = 'block';
 
-  songAudio.onended = () => { songNext(); };
-}
+  /* Update now-playing info */
+  const t = document.getElementById('npTitle');
+  const a = document.getElementById('npArtist');
+  const n = document.getElementById('npNum');
+  const pb= document.getElementById('npPlayBtn');
+  if(t)  t.textContent  = song.title;
+  if(a)  a.textContent  = song.artist;
+  if(n)  n.textContent  = (idx+1) + ' / ' + songList.length;
+  if(pb) pb.textContent = '⏸';
 
-function updateNowPlaying() {
-  const track = songTracks[songIdx];
-  if(!track) return;
-  const np = document.getElementById('nowPlaying');
-  if(np) np.style.display = 'block';
-  const t  = document.getElementById('npTitle');
-  const a  = document.getElementById('npArtist');
-  const pb = document.getElementById('npPlayBtn');
-  if(t)  t.textContent  = track.name;
-  if(a)  a.textContent  = track.artist_name;
-  if(pb) pb.textContent = songPlaying ? '⏸' : '▶';
-}
+  /* Highlight row */
+  renderSongList();
 
-function startProgressTimer() {
-  if(npTimer) clearInterval(npTimer);
-  npTimer = setInterval(()=>{
-    if(!songAudio || !songPlaying) return;
-    const pct = songAudio.duration ? (songAudio.currentTime / songAudio.duration * 100) : 0;
-    const prog = document.getElementById('npProgress');
-    const time = document.getElementById('npTime');
-    if(prog) prog.style.width = pct + '%';
-    if(time) time.textContent = fmtDur(songAudio.currentTime);
-  }, 500);
-}
-
-function songStop() {
-  if(songAudio){ songAudio.pause(); songAudio.src=''; songAudio=null; }
-  songPlaying = false;
-  if(npTimer){ clearInterval(npTimer); npTimer=null; }
-  const pb = document.getElementById('npPlayBtn');
-  if(pb) pb.textContent = '▶';
+  /* Play via YouTube */
+  if(ytPlayer && ytReady) {
+    ytPlayer.loadVideoById(song.yt);
+  } else {
+    ytPending = song.yt;
+    /* Update iframe src directly as fallback */
+    const frame = document.getElementById('ytFrame');
+    if(frame && !ytPlayer) {
+      frame.src = 'https://www.youtube-nocookie.com/embed/' + song.yt
+        + '?autoplay=1&controls=1&rel=0&modestbranding=1&playsinline=1';
+    }
+  }
+  songPaused = false;
 }
 
 function songToggle() {
-  if(!songAudio && songTracks.length) { playSong(songIdx); return; }
-  if(!songAudio) return;
-  if(songPlaying){ songAudio.pause(); songPlaying=false; }
-  else { songAudio.play(); songPlaying=true; }
-  updateNowPlaying();
+  if(songIdx < 0) { playSong(0); return; }
+  if(ytPlayer && ytReady) {
+    const state = ytPlayer.getPlayerState();
+    if(state === 1) { ytPlayer.pauseVideo(); }
+    else            { ytPlayer.playVideo();  }
+  } else {
+    /* Fallback: reload iframe */
+    if(songIdx >= 0) playSong(songIdx);
+  }
 }
 
 function songNext() {
-  const next = (songIdx+1) % songTracks.length;
-  if(!songLooping && next === 0 && songTracks.length > 0) {
-    /* end of list — stop unless looping */
-    songStop(); const np=document.getElementById('nowPlaying'); if(np)np.style.display='none';
-    renderSongList(); return;
+  const next = songIdx + 1;
+  if(next >= songList.length) {
+    if(songLooping) playSong(0);
+    else songStop();
+  } else {
+    playSong(next);
   }
-  playSong(next);
 }
 
 function songPrev() {
-  playSong((songIdx - 1 + songTracks.length) % songTracks.length);
+  playSong(Math.max(0, songIdx - 1));
+}
+
+function songStop() {
+  if(ytPlayer && ytReady) {
+    try { ytPlayer.stopVideo(); } catch(e){}
+  }
+  songIdx = -1; songPaused = false;
+  const npEl  = document.getElementById('nowPlaying');
+  const ytWrap= document.getElementById('ytWrap');
+  if(npEl)  npEl.style.display  = 'none';
+  if(ytWrap) ytWrap.style.display = 'none';
+  renderSongList();
 }
 
 function toggleLoop() {
   songLooping = !songLooping;
   const btn = document.getElementById('loopBtn');
-  if(btn){ btn.textContent = 'Loop: ' + (songLooping ? 'On' : 'Off'); btn.style.color = songLooping ? 'var(--teal)' : ''; }
+  if(btn) {
+    btn.textContent = 'Loop: ' + (songLooping ? 'On' : 'Off');
+    btn.style.color = songLooping ? 'var(--teal)' : '';
+    btn.style.borderColor = songLooping ? 'var(--teal)' : '';
+  }
 }
 
 function refreshSongs() { renderSongs(); }
