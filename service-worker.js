@@ -1,7 +1,7 @@
 /* HeartBeat Studio — Service Worker v5 */
 'use strict';
 
-const CACHE = 'hbs-v7';
+const CACHE = 'hbs-v9';
 const ASSETS = [
   './manifest.json',
   './icons/icon-192.png',
