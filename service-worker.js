@@ -1,7 +1,7 @@
 /* HeartBeat Studio — Service Worker v1 */
 'use strict';
 
-const CACHE = 'hbs-v1';
+const CACHE = 'hbs-v4';
 const ASSETS = [
   './',
   './index.html',

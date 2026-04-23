@@ -6,6 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>HeartBeat Studio</title>
+<!-- APP VERSION: v3 — FFT detection, IIR fix -->
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
@@ -572,136 +573,132 @@ function startPPG(vid) {
   const dpr=window.devicePixelRatio||1;
   wC.width=wC.offsetWidth*dpr; wC.height=wC.offsetHeight*dpr;
 
-  /*
-    FFT-BASED PULSE DETECTION — verified in simulation (9/9 BPM ranges pass)
-    
-    3 bugs fixed vs previous version:
-    1. IIR filter initialized to first sample (not 0) → no startup transient
-    2. hasSig gate removed from FFT → FFT runs as soon as 8s accumulated
-    3. Status shows "Calibrating" for first 8s, not "No signal"
-  */
+  /* FPS is MEASURED from actual timestamps — not assumed.
+     Safari RAF runs at 60fps, not 30fps. Hardcoding 30 gives exactly half BPM.
+     We collect 8 real-time seconds of samples, then compute FFT using
+     the ACTUAL elapsed time to get correct BPM. */
+  const FFT_REAL_SECS = 8;  /* real-time seconds per FFT window        */
+  const FFT_INTERVAL  = 2;  /* real-time seconds between FFT updates   */
+  const HP = 0.985;
 
-  const FPS      = 30;
-  const HP_ALPHA = 0.985;   /* IIR highpass removes slow AE drift          */
-  const FFT_SEC  = 8;       /* seconds of signal per FFT window            */
-  const FFT_INT  = 2;       /* compute FFT every N seconds                 */
-  const BPM_MIN  = 40;
-  const BPM_MAX  = 180;
+  let hpBuf=[], tsBuf=[];   /* signal + timestamps (ms), always in sync */
+  let hpPrev=0, rawPrev=null;
+  let bpmList=[];
+  let lastFftTime=0;        /* ms timestamp of last FFT */
+  let fi=0;
 
-  let rawBuf=[], hpBuf=[];
-  let hpPrev=null, rawPrev=null;  /* null = uninitialized, set on first frame */
-  let fi=0, lastFftFi=0;
-  let bpmReadings=[];  /* last 5 FFT results for median smoothing */
-
-  /* Countdown starts immediately */
-  G.scanTimer = setInterval(()=>{
+  G.scanTimer=setInterval(()=>{
     G.elapsed++;
-    const rem = G.SCAN_SECS - G.elapsed;
-    document.getElementById('scanTime').textContent = rem + 's remaining';
-    document.getElementById('progFill').style.width = (G.elapsed/G.SCAN_SECS*100)+'%';
-    if(G.elapsed >= G.SCAN_SECS){ clearInterval(G.scanTimer); G.scanTimer=null; finalize(); }
-  }, 1000);
+    const rem=G.SCAN_SECS-G.elapsed;
+    document.getElementById('scanTime').textContent=rem+'s remaining';
+    document.getElementById('progFill').style.width=(G.elapsed/G.SCAN_SECS*100)+'%';
+    if(G.elapsed>=G.SCAN_SECS){clearInterval(G.scanTimer);G.scanTimer=null;finalize();}
+  },1000);
 
-  /* DFT over heartbeat frequency range only */
-  function computeFFT(buf) {
-    const M = buf.length;
+  function computeBPM(hpSeg, tsSeg) {
+    const M = hpSeg.length;
+    if (M < 30) return null;
+
+    /* ACTUAL sampling rate from timestamps — device-independent */
+    const actualFps = (M-1)*1000 / (tsSeg[M-1] - tsSeg[0]);
+
     /* Hanning window + mean removal */
-    const sw = new Float32Array(M);
-    let mean = 0;
-    for(let i=0;i<M;i++){
-      sw[i] = buf[i] * 0.5*(1 - Math.cos(2*Math.PI*i/(M-1)));
-      mean += sw[i];
+    const w = new Float32Array(M);
+    let mn = 0;
+    for (let i=0;i<M;i++){
+      w[i] = hpSeg[i] * 0.5*(1 - Math.cos(6.2832*i/(M-1)));
+      mn += w[i];
     }
-    mean /= M;
-    for(let i=0;i<M;i++) sw[i] -= mean;
+    mn /= M;
+    for (let i=0;i<M;i++) w[i] -= mn;
 
-    /* Find peak power frequency in BPM_MIN..BPM_MAX */
-    const kMin = Math.max(1, Math.round(BPM_MIN/60 * M/FPS));
-    const kMax = Math.round(BPM_MAX/60 * M/FPS);
-    let bestK=kMin, bestPow=0;
-    for(let k=kMin; k<=kMax; k++){
+    /* DFT over 40-180 BPM using ACTUAL fps for correct frequency mapping */
+    const k0 = Math.max(1, Math.round(40 * M / (60 * actualFps)));
+    const k1 = Math.round(180 * M / (60 * actualFps));
+
+    let bestK=k0, bestP=0;
+    for (let k=k0; k<=k1; k++) {
       let re=0, im=0;
-      for(let n=0;n<M;n++){
-        const a = 2*Math.PI*k*n/M;
-        re += sw[n]*Math.cos(a);
-        im += sw[n]*Math.sin(a);
+      for (let n=0;n<M;n++){
+        const a=6.2832*k*n/M;
+        re+=w[n]*Math.cos(a);
+        im+=w[n]*Math.sin(a);
       }
-      const pow = re*re + im*im;
-      if(pow > bestPow){ bestPow=pow; bestK=k; }
+      const p=re*re+im*im;
+      if(p>bestP){bestP=p;bestK=k;}
     }
-    const bpm = Math.round(bestK * FPS / M * 60);
-    return (bpm>=BPM_MIN && bpm<=BPM_MAX) ? bpm : null;
+
+    /* BPM using actual fps */
+    const bpm = Math.round(bestK * 60 * actualFps / M);
+    return (bpm>=40&&bpm<=180) ? bpm : null;
   }
 
   function frame(){
     if(!G.stream) return;
     fi++; G.frameN++;
+    const now = Date.now();
 
-    /* Sample mean red channel */
     ctx.drawImage(vid,0,0,40,30);
-    const px = ctx.getImageData(0,0,40,30).data;
-    let rs=0;
-    for(let i=0;i<px.length;i+=4) rs+=px[i];
-    const mR = rs/(px.length/4);
+    const px=ctx.getImageData(0,0,40,30).data;
+    let rs=0; for(let i=0;i<px.length;i+=4) rs+=px[i];
+    const mR=rs/(px.length/4);
 
-    /* FIX 1: Initialize IIR to first real sample — eliminates 6s startup transient */
-    if(hpPrev===null){ hpPrev=mR; rawPrev=mR; }
-
-    /* IIR highpass: y[n] = α*(y[n-1] + x[n] - x[n-1]) */
-    const hp = HP_ALPHA*(hpPrev + mR - rawPrev);
+    if(rawPrev===null) rawPrev=mR;
+    const hp=HP*(hpPrev+mR-rawPrev);
     hpPrev=hp; rawPrev=mR;
 
-    rawBuf.push(mR); if(rawBuf.length>300) rawBuf.shift();
-    hpBuf.push(hp);  if(hpBuf.length>300)  hpBuf.shift();
-    G.ppgBuf.push(hp); G.ppgTs.push(Date.now());
-    if(G.ppgBuf.length>300){ G.ppgBuf.shift(); G.ppgTs.shift(); }
+    /* Keep FFT_REAL_SECS worth of data by time, not frame count */
+    hpBuf.push(hp); tsBuf.push(now);
+    G.ppgBuf.push(hp); G.ppgTs.push(now);
+    const cutoff = now - FFT_REAL_SECS*1000*1.5;
+    while(tsBuf.length>2 && tsBuf[0]<cutoff){ hpBuf.shift(); tsBuf.shift(); }
+    while(G.ppgBuf.length>300){ G.ppgBuf.shift(); G.ppgTs.shift(); }
 
-    /* Signal quality: amplitude of last 2s of HP signal */
-    const qWin = hpBuf.length>=60 ? hpBuf.slice(-60) : hpBuf;
-    const lo=Math.min(...qWin), hi=Math.max(...qWin), amp=hi-lo;
-
-    /* FIX 2: Quality bars based on amplitude, no blocking gate */
-    const q = amp<0.3?0 : amp<1?1 : amp<2?2 : amp<4?3 : amp<8?4 : 5;
+    /* Signal quality */
+    const qWin=hpBuf.slice(-120);
+    const amp=Math.max(...qWin)-Math.min(...qWin);
+    const q=amp<0.3?0:amp<1?1:amp<2?2:amp<4?3:amp<8?4:5;
     setSig(q);
 
-    /* FIX 3: Show "Calibrating" for first 8s, never "No signal" during that time */
-    const secsElapsed = fi/FPS;
-    if(secsElapsed < 8){
-      /* Show warmup progress clearly */
-      const warmPct = Math.round(secsElapsed/8*100);
-      document.getElementById('statusIcon').textContent = '🔴';
-      document.getElementById('statusTxt').textContent =
-        `Calibrating... ${Math.ceil(8-secsElapsed)}s (keep finger on lens)`;
-      document.getElementById('statusStrip').className = 'status-strip';
-    } else if(q===0){
-      setStatus('init');  /* genuinely no signal after warmup */
-    } else if(q<=1)  setStatus('weak');
-    else if(q<=2)    setStatus('good');
-    else             setStatus('strong');
+    /* Status */
+    const elapsed_s = fi>1 ? (now - tsBuf[0])/1000 : 0;
+    const haveEnough = elapsed_s >= FFT_REAL_SECS;
+    if(!haveEnough){
+      const sLeft = Math.ceil(FFT_REAL_SECS - elapsed_s);
+      document.getElementById('statusIcon').textContent='🔴';
+      document.getElementById('statusTxt').textContent='Calibrating — keep finger still ('+sLeft+'s)';
+      document.getElementById('statusStrip').className='status-strip';
+    } else if(q===0){ setStatus('init'); }
+    else if(q<=1) setStatus('weak');
+    else if(q<=2) setStatus('good');
+    else          setStatus('strong');
 
-    /* FFT: run every FFT_INT seconds once we have FFT_SEC seconds of data */
-    const framesNeeded = FPS * FFT_SEC;
-    if(hpBuf.length >= framesNeeded && fi - lastFftFi >= FPS*FFT_INT){
-      lastFftFi = fi;
-      const seg = hpBuf.slice(-framesNeeded);
-      const bpm = computeFFT(seg);
-      if(bpm !== null){
-        bpmReadings.push(bpm);
-        if(bpmReadings.length > 5) bpmReadings.shift();
-        /* Median of last readings */
-        const sorted = bpmReadings.slice().sort((a,b)=>a-b);
-        const med = sorted[Math.floor(sorted.length/2)];
-        G.prevBpm = med;
-        G.bpmHist.push(med);
-        if(G.bpmHist.length>16) G.bpmHist.shift();
-        document.getElementById('liveBpm').textContent = med;
+    /* FFT: once we have FFT_REAL_SECS of data, run every FFT_INTERVAL seconds */
+    if(haveEnough && (now-lastFftTime) >= FFT_INTERVAL*1000){
+      lastFftTime=now;
+      /* Extract exactly FFT_REAL_SECS from the end of buffer */
+      const cutTs = now - FFT_REAL_SECS*1000;
+      let startIdx=0;
+      while(startIdx<tsBuf.length-1 && tsBuf[startIdx]<cutTs) startIdx++;
+      const hpSeg = hpBuf.slice(startIdx);
+      const tsSeg = tsBuf.slice(startIdx);
+
+      const bpm = computeBPM(hpSeg, tsSeg);
+      if(bpm){
+        bpmList.push(bpm);
+        if(bpmList.length>5) bpmList.shift();
+        const sorted=bpmList.slice().sort((a,b)=>a-b);
+        const med=sorted[Math.floor(sorted.length/2)];
+        G.prevBpm=med;
+        G.bpmHist.push(med); if(G.bpmHist.length>16) G.bpmHist.shift();
+        document.getElementById('liveBpm').textContent=med;
       }
     }
 
-    if(G.frameN%2===0) drawScanWave(wC, wCtx, hpBuf, dpr);
-    G.rafId = requestAnimationFrame(frame);
+    if(G.frameN%2===0) drawScanWave(wC,wCtx,hpBuf,dpr);
+    G.rafId=requestAnimationFrame(frame);
   }
-  G.rafId = requestAnimationFrame(frame);
+  G.rafId=requestAnimationFrame(frame);
 }
 function drawScanWave(cv,cx,buf,dpr){
   const W=cv.width, H=cv.height;
