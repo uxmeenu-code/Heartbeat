@@ -50,6 +50,8 @@ nav{position:fixed;bottom:0;left:0;right:0;height:calc(var(--navh) + var(--safe-
   padding:16px;margin-bottom:12px}
 .card-title{font-size:13px;font-weight:700;color:var(--tx);margin-bottom:8px;
   letter-spacing:.02em}
+#songList li{font-size:13px;color:var(--tx2);line-height:1.45}
+#songList li span{color:var(--tx3);font-size:11px;display:block;margin-top:1px}
 
 /* ── BUTTONS ── */
 .btn{width:100%;min-height:52px;border:none;border-radius:var(--r);
@@ -343,6 +345,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
       <button class="gbtn" onclick="pickGenre('rock',this)"><span>🎸</span>Rock</button>
       <button class="gbtn" onclick="pickGenre('latin',this)"><span>🪘</span>Latin</button>
     </div>
+  </div>
+  <div class="card" id="songCard">
+    <div class="card-title">🎧 Recommended Songs</div>
+    <div id="songState" style="font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--teal);margin-bottom:10px"></div>
+    <ol id="songList" style="padding-left:18px;margin:0 0 12px;display:flex;flex-direction:column;gap:7px"></ol>
+    <button class="btn btn-s" onclick="refreshSongs()" style="min-height:38px;font-size:11px">↻ Refresh Picks</button>
   </div>
   <input id="sessName" class="sess-input" placeholder="Name this session…" maxlength="40">
   <div class="btn-row">
@@ -764,6 +772,7 @@ function finalize(){
 
   document.getElementById('trackSub').textContent=`${bpm} BPM · ${G.genre}`;
   show('sResults');
+  renderSongs();
   requestAnimationFrame(()=>requestAnimationFrame(()=>{ startResWave(bpm); startMusic(bpm,hrv); }));
 }
 
@@ -1313,6 +1322,66 @@ async function checkCameraPermission() {
   /* Can't determine — show generic ask */
   updatePermUI('unknown');
 }
+
+/* ── RECOMMENDED SONGS ── */
+const SONGS = {
+  calm:   { label:'Calm',   list:[
+    {t:'Weightless',      a:'Marconi Union'},
+    {t:'Sunset Lover',    a:'Petit Biscuit'},
+    {t:'Experience',      a:'Ludovico Einaudi'},
+    {t:'On & On',         a:'Cartoon ft. Daniel Levi'},
+    {t:'Svefn-G-Englar',  a:'Sigur Rós'},
+  ]},
+  focus:  { label:'Focus',  list:[
+    {t:'Awake',           a:'Tycho'},
+    {t:'Time',            a:'Hans Zimmer'},
+    {t:'Intro',           a:'The xx'},
+    {t:'April',           a:'Nils Frahm'},
+    {t:'Comptine dun autre ete', a:'Yann Tiersen'},
+  ]},
+  active: { label:'Active', list:[
+    {t:'Blinding Lights', a:'The Weeknd'},
+    {t:'Titanium',        a:'David Guetta ft. Sia'},
+    {t:'Higher Love',     a:'Kygo & Whitney Houston'},
+    {t:"Can’t Stop the Feeling", a:"Justin Timberlake"},
+    {t:'Shake It Off',    a:'Taylor Swift'},
+  ]},
+  energy: { label:'Energy', list:[
+    {t:'Levels',          a:'Avicii'},
+    {t:'Animals',         a:'Martin Garrix'},
+    {t:"Don’t Stop Me Now", a:"Queen"},
+    {t:'Jump',            a:'Van Halen'},
+    {t:'Pump Up the Jam', a:'Technotronic'},
+  ]},
+};
+
+function getSongState(bpm){
+  if(bpm<70)  return 'calm';
+  if(bpm<85)  return 'focus';
+  if(bpm<100) return 'active';
+  return 'energy';
+}
+
+function renderSongs(){
+  const bpm  = G.bpm || 72;
+  const key  = getSongState(bpm);
+  const data = SONGS[key];
+  const pool = data.list.slice();
+  /* Shuffle then take 3 */
+  for(let i=pool.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[pool[i],pool[j]]=[pool[j],pool[i]];}
+  const picks = pool.slice(0,3);
+
+  const stateEl = document.getElementById('songState');
+  const listEl  = document.getElementById('songList');
+  if(!stateEl||!listEl) return;
+
+  stateEl.textContent = 'State: ' + data.label + '  ·  ' + bpm + ' BPM';
+  listEl.innerHTML = picks.map(s=>
+    `<li>${s.t}<span>${s.a}</span></li>`
+  ).join('');
+}
+
+function refreshSongs(){ renderSongs(); }
 
 document.addEventListener('DOMContentLoaded',()=>{
   loadSessions();
